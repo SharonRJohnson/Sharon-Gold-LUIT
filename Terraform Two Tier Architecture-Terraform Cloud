@@ -1,0 +1,290 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "5.0.1"
+    }
+  }
+}
+
+provider "aws" {
+  shared_credentials_files = ["/users/sharon/.aws/credentials"]
+  region                   = "us-east-1"
+}
+
+terraform {
+  required_version = ">= 1.4.6"
+
+  cloud {
+    organization = "Sharon-LUIT"
+
+    workspaces {
+      name = "TwoTierArchiProject"
+    }
+  }
+}
+
+resource "aws_vpc" "myvpc" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "myvpc"
+  }
+}
+
+resource "aws_subnet" "public_subnet_1" {
+  cidr_block        = "10.0.1.0/24"
+  vpc_id            = var.vpc_id
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Name = "public-subnet-1"
+  }
+}
+
+resource "aws_subnet" "public_subnet_2" {
+  cidr_block        = "10.0.2.0/24"
+  vpc_id            = var.vpc_id
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Name = "public-subnet-2"
+  }
+}
+
+resource "aws_subnet" "private_subnet_1" {
+  cidr_block        = "10.0.11.0/24"
+  vpc_id            = var.vpc_id
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Name = "private-subnet-1"
+  }
+}
+
+resource "aws_subnet" "private_subnet_2" {
+  cidr_block        = "10.0.12.0/24"
+  vpc_id            = var.vpc_id
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Name = "private-subnet-2"
+  }
+}
+
+resource "aws_internet_gateway" "sharon_twotier_igw" {
+  vpc_id = var.vpc_id
+
+  tags = {
+    Name = "my-vpc-igw"
+  }
+}
+
+# Create the first route table
+resource "aws_route_table" "public_route_table1" {
+  vpc_id = var.vpc_id
+
+  tags = {
+    Name = "public-route-table-1"
+  }
+}
+
+# Create the second route table
+resource "aws_route_table" "public_route_table2" {
+  vpc_id = var.vpc_id
+
+  tags = {
+    Name = "public-route-table-2"
+  }
+}
+
+# First route table with the first public subnet association 1
+resource "aws_route_table_association" "public_subnet_association1" {
+  subnet_id      = aws_subnet.public_subnet_1.id
+  route_table_id = aws_route_table.public_route_table1.id
+}
+
+# Second route table with the second public subnet association 2
+resource "aws_route_table_association" "public_subnet_association2" {
+  subnet_id      = aws_subnet.public_subnet_2.id
+  route_table_id = aws_route_table.public_route_table2.id
+}
+
+resource "aws_security_group" "webserver_sg" {
+  name        = "webserver_sg"
+  description = "Security group for web servers"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "sharon_sg"
+  }
+}
+
+# First EC2 instance
+resource "aws_instance" "web_server1" {
+  ami                         = "ami-09988af04120b3591"
+  instance_type               = "t2.micro"
+  subnet_id                   = aws_subnet.public_subnet_1.id
+  vpc_security_group_ids      = [aws_security_group.webserver_sg.id]
+  associate_public_ip_address = true
+  key_name                    = "Sharon_New_Key"
+
+  user_data = <<-EOF
+#! /bin/bash
+yum update -y
+yum install httpd -y
+systemctl start httpd
+systemctl enable httpd
+echo "<html><body><h1>Hello from Webserver 1 
+</h1></body></html>" > /var/www/html/index.html
+  EOF
+
+  tags = {
+    Name = "web-server-instance-1"
+  }
+}
+
+# Second EC2 instance
+resource "aws_instance" "web_server2" {
+  ami                         = "ami-09988af04120b3591"
+  instance_type               = "t2.micro"
+  subnet_id                   = aws_subnet.public_subnet_2.id
+  vpc_security_group_ids      = [aws_security_group.webserver_sg.id]
+  associate_public_ip_address = true
+  key_name                    = "Sharon_New_Key"
+
+  user_data = <<-EOF
+#! /bin/bash
+yum update -y
+yum install httpd -y
+systemctl start httpd
+systemctl enable httpd
+echo "<html><body><h1>Hello from Webserver 2 
+</h1></body></html>" > /var/www/html/index.html
+EOF
+
+  tags = {
+    Name = "web-server-instance-2"
+  }
+}
+
+
+resource "aws_security_group" "rds_sg" {
+  name        = "sjrds_sg"
+  description = "Security group for RDS"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "rds-security-group"
+  }
+}
+
+resource "aws_db_instance" "rds_instance" {
+  engine                    = "mysql"
+  instance_class            = "db.t2.micro"
+  allocated_storage         = 20
+  storage_type              = "gp2"
+  publicly_accessible       = false
+  identifier                = "sharon-rds-instance"
+  username                  = "sharonrdsadmin"
+  password                  = "sharonrdspassword123"
+  skip_final_snapshot       = false
+  final_snapshot_identifier = "my-snapshot"
+  tags = {
+    Name = "rds-instance"
+  }
+}
+
+resource "aws_eip" "nat_eip" {
+  tags = {
+    Name = "nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "nat_gateway" {
+  allocation_id = aws_eip.nat_eip.id
+  subnet_id     = aws_subnet.public_subnet_1.id
+
+  tags = {
+    Name = "nat-gateway"
+  }
+}
+
+# Associate the NAT gateway with the private subnets
+resource "aws_route_table_association" "private_subnet_1" {
+  subnet_id      = aws_subnet.private_subnet_1.id
+  route_table_id = aws_route_table.public_route_table1.id
+}
+
+resource "aws_route_table_association" "private_subnet_2" {
+  subnet_id      = aws_subnet.private_subnet_2.id
+  route_table_id = aws_route_table.public_route_table2.id
+}
+
+# Private route tables to the NAT gateway
+resource "aws_route" "private_route1" {
+  route_table_id         = aws_route_table.public_route_table1.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat_gateway.id
+}
+
+resource "aws_route" "private_route2" {
+  route_table_id         = aws_route_table.public_route_table2.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat_gateway.id
+}
+
+resource "aws_lb" "web_lb" {
+  name               = "myweb-lb"
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.webserver_sg.id]
+  subnets            = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id]
+
+  tags = {
+    Name = "myweb-lb"
+  }
+}
