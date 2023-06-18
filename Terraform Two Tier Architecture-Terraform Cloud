@@ -12,6 +12,16 @@ provider "aws" {
   region                   = "us-east-1"
 }
 
+resource "tls_private_key" "twotier_keypair" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "aws_key_pair" "twotier_keypair" {
+  key_name   = "twotier_keypair-keypair"
+  public_key = tls_private_key.twotier_keypair.public_key_openssh
+}
+
 terraform {
   required_version = ">= 1.4.6"
 
@@ -87,6 +97,11 @@ resource "aws_route_table" "public_route_table1" {
   tags = {
     Name = "public-route-table-1"
   }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.sharon_twotier_igw.id
+  }
 }
 
 # Create the second route table
@@ -95,6 +110,11 @@ resource "aws_route_table" "public_route_table2" {
 
   tags = {
     Name = "public-route-table-2"
+  }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.sharon_twotier_igw.id
   }
 }
 
@@ -121,18 +141,30 @@ resource "aws_security_group" "webserver_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   ingress {
+    description = "http"
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  ingress {
+    description = "http"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -152,7 +184,7 @@ resource "aws_instance" "web_server1" {
   subnet_id                   = aws_subnet.public_subnet_1.id
   vpc_security_group_ids      = [aws_security_group.webserver_sg.id]
   associate_public_ip_address = true
-  key_name                    = "Sharon_New_Key"
+  key_name                    = aws_key_pair.twotier_keypair.key_name
 
   user_data = <<-EOF
 #! /bin/bash
@@ -160,9 +192,7 @@ yum update -y
 yum install httpd -y
 systemctl start httpd
 systemctl enable httpd
-echo "<html><body><h1>Hello from Webserver 1 
-</h1></body></html>" > /var/www/html/index.html
-  EOF
+EOF
 
   tags = {
     Name = "web-server-instance-1"
@@ -176,7 +206,7 @@ resource "aws_instance" "web_server2" {
   subnet_id                   = aws_subnet.public_subnet_2.id
   vpc_security_group_ids      = [aws_security_group.webserver_sg.id]
   associate_public_ip_address = true
-  key_name                    = "Sharon_New_Key"
+  key_name                    = aws_key_pair.twotier_keypair.key_name
 
   user_data = <<-EOF
 #! /bin/bash
@@ -184,8 +214,6 @@ yum update -y
 yum install httpd -y
 systemctl start httpd
 systemctl enable httpd
-echo "<html><body><h1>Hello from Webserver 2 
-</h1></body></html>" > /var/www/html/index.html
 EOF
 
   tags = {
@@ -286,5 +314,34 @@ resource "aws_lb" "web_lb" {
 
   tags = {
     Name = "myweb-lb"
+  }
+}
+
+# Add Listener to Load Balancer
+resource "aws_lb_listener" "web_lb_listener" {
+  load_balancer_arn = aws_lb.web_lb.arn
+  port              = 8080
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web_target_group.arn
+  }
+}
+
+#Target Group for Load Balancer
+resource "aws_lb_target_group" "web_target_group" {
+  name        = 8080
+  port        = 8080
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = var.vpc_id
+
+  health_check {
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 3
+    interval            = 30
+    path                = "/"
   }
 }
